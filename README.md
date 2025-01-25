@@ -5,7 +5,7 @@
 
 ## About & Features
 Tiny authorization service using JWT pairs (access & refresh), suitable for bootstrapping small projects.  
-Refresh token is on rotation for better simplicity (rather then token invalidation mechanism).  
+Refresh token is on rotation for better simplicity (rather than token invalidation mechanism).  
 Maintains a single DB collection: `users`.  
 Includes example cURL commands for easy testing in your own environment.  
 
