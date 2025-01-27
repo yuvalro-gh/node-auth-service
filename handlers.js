@@ -65,13 +65,15 @@ exports.sign_up = handle_internal_errors(async (req, res) => {
             !pwd.toLowerCase().includes(uname.toLowerCase()),
             // Must be at least 8 characters long
             pwd.length >= 8, 
-            // Must use only these characters and have one of each group
+            // Must be at most 32 charaters long
+            pwd.length <= 32,
+            // Must use only these characters
             /^[a-zA-Z0-9!@#$%^&*()_+=-]*$/.test(pwd),
+            // Must contain at least 1 character from each group
             /[A-Z]/.test(pwd),
             /[a-z]/.test(pwd),
             /[0-9]/.test(pwd),
             /[!@#$%^&*()_+=-]/.test(pwd),
-
         ].every(i => i === true)) {
         return res.status(400).send('Password does not meet requirements.\n');
     }
