@@ -1,36 +1,62 @@
 const handlers = require('./handlers.js')
+const CONSTS = require('./consts.js')
+const mongoose = require('mongoose')
 const express = require('express');
-const mongoose = require('mongoose');
-const dotenv = require('dotenv');
-const cookie_parser = require('cookie-parser');
+const cookieParser = require('cookie-parser');
+const cors = require('cors');
+const morgan = require('morgan');
 
-
-dotenv.config();
-
-// Set up MongoDB connection
-const mongo_uri = `mongodb://${process.env.MONGO_HOST_ADDRESS}:${process.env.MONGO_PORT}/${process.env.MONGO_DB_NAME}`
-mongoose
-    .connect(
-        mongo_uri,
-        { serverSelectionTimeoutMS: process.env.MONGO_CONNECTION_ATTEMPT_TIMEOUT }
-    )
-    .then(() => {
-        console.log(`Connection to MongoDB established (${mongo_uri}).`);
-    })
-    .catch((err) => {
-        console.error(`Connection to MongoDB failed (${mongo_uri}).`);
-        throw err;
-    });
 
 // Set up Express app
-const express_uri = `http://${process.env.APP_HOST_ADDRESS}:${process.env.APP_PORT}`
 const app = express();
-app.use(cookie_parser())
+app.use(morgan('dev'));
+app.use(cookieParser())
 app.use(express.json());
-app.post('/sign-up', handlers.sign_up);
-app.post('/sign-in', handlers.sign_in);
-app.post('/refresh', handlers.refresh);
-app.post('/sign-out', handlers.sign_out);
-app.post('/verify', handlers.verify);
-app.listen(process.env.APP_PORT);
-console.log(`Express app is up and running (${express_uri}).`);
+app.use(cors({ origin: CONSTS.DEV_ORIGIN, credentials: true })) // TODO Remove on production.
+/*
+curl -i \
+POST "http://$APP_HOST_ADDRESS:$APP_PORT/sign-up" \
+-H "Content-Type: application/json" \
+-d '{"uname":"'"$TEST_UNAME"'","pwd":"'"$TEST_PWD"'"}'
+*/
+app.post('/sign-up', handlers.signUp);
+/*
+curl -i \
+POST "http://${APP_HOST_ADDRESS}:${APP_PORT}/sign-in" \
+-H "Content-Type: application/json" \
+-d '{"uname":"'"${TEST_UNAME}"'","pwd":"'"${TEST_PWD}"'"}'
+*/
+app.post('/sign-in', handlers.signIn, handlers.addTokens);
+/*
+curl -i \
+-X POST http://${APP_HOST_ADDRESS}:${APP_PORT}/refresh \
+--cookie "rt=${TEST_RT}"
+*/
+app.post('/refresh-tokens', handlers.refreshTokens, handlers.addTokens);
+/*
+curl -i \
+-X POST http://${APP_HOST_ADDRESS}:${APP_PORT}/sign-out \
+--cookie "rt=${TEST_RT}"
+*/
+app.post('/sign-out', handlers.signOut);
+/*
+curl \
+-X POST http://${APP_HOST_ADDRESS}:${APP_PORT}/verify-tokens \
+--cookie "rt=${TEST_RT}"
+*/
+app.post('/verify-tokens', handlers.verifyTokens);
+app.listen(CONSTS.APP_PORT);
+console.log(`Express app is up and running (port ${CONSTS.APP_PORT}).`);
+
+// Establish connection to MongoDB instance
+const uri = `mongodb://${CONSTS.MONGO_HOST_ADDRESS}:${CONSTS.MONGO_PORT}/${CONSTS.MONGO_APP_DB}`
+const opts = { serverSelectionTimeoutMS: CONSTS.MONGO_CONNECTION_TIMEOUT }
+mongoose
+    .connect(uri, opts)
+    .then(() => {
+        console.log(`Connection to MongoDB established (${uri}).`);
+    })
+    .catch((err) => {
+        console.error(`Connection to MongoDB failed (${uri}).`);
+        throw err;
+    });

@@ -1,10 +1,8 @@
-const dotenv = require('dotenv');
+const CONSTS = require('./consts.js');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken');
 
-
-dotenv.config();
 
 const User = mongoose.model(
     'User',
@@ -14,50 +12,46 @@ const User = mongoose.model(
     })
 );
 
-const gen_and_attach_tokens = (res, payload) => {
-    const at = jwt.sign(
-        payload,
-        process.env.AT_SECRET,
-        { expiresIn: `${process.env.AT_TTL}s` }
-    );
-    const rt = jwt.sign(
-        payload,
-        process.env.RT_SECRET,
-        { expiresIn: `${process.env.RT_TTL}s` }
-    );
-    // Send refresh token in response cookie for added security;
-    // Access token in response body.
-    res.cookie('rt', rt, {
-            httpOnly: true,
-            secure: false,
-            sameSite: 'Strict',
-            maxAge: Number(process.env.RT_TTL) * 1000,
-        }
-    );
-    res.json({ at });
-}
-
-const handle_internal_errors = (fn) => (async (req, res, next) => {
+const catchErrors = (fn) => (async (...args) => {
     try {
-        await fn(req, res ,next);
+        await fn(...args);
     }
     catch (err) {
         console.error(err); // TODO More verbose?
-        return res.status(500).send('Internal server error.\n')
+        return args?.res.sendStatus(500);
     }
-})
+});
 
-/*
-curl -i \
-POST "http://$APP_HOST_ADDRESS:$APP_PORT/sign-up" \
--H "Content-Type: application/json" \
--d '{"uname":"'"$TEST_UNAME"'","pwd":"'"$TEST_PWD"'"}'
-*/
-exports.sign_up = handle_internal_errors(async (req, res) => {
+exports.addTokens = catchErrors((req, res) => {
+    const { jwtPayload } = req;
+    res.cookie(
+        'at',
+        jwt.sign(jwtPayload, CONSTS.AT_SECRET, { expiresIn: `${CONSTS.AT_TTL}s` }),
+        {
+            httpOnly: false,
+            secure: true,
+            sameSite: 'Strict',
+            maxAge: Number(CONSTS.AT_TTL) * 1000 // Cookie self-destruction timer (browser directive)
+        }
+    );
+    res.cookie(
+        'rt',
+        jwt.sign(jwtPayload, CONSTS.RT_SECRET, { expiresIn: `${CONSTS.RT_TTL}s` }),
+        {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'Strict',
+            maxAge: Number(CONSTS.RT_TTL) * 1000
+        }
+    );
+    return res.sendStatus(200);
+});
+
+exports.signUp = catchErrors(async (req, res) => {
     const { uname, pwd } = req.body;
     let user = await User.findOne({ uname });
     if (user) {
-        return res.status(409).send('User already exists.\n');
+        return res.status(409).send({ msg: 'User already exists.' });
     }
     // Password validation, optional.
     if (![
@@ -75,81 +69,80 @@ exports.sign_up = handle_internal_errors(async (req, res) => {
             /[0-9]/.test(pwd),
             /[!@#$%^&*()_+=-]/.test(pwd),
         ].every(i => i === true)) {
-        return res.status(400).send('Password does not meet requirements.\n');
+        return res.status(400).send({ msg: 'Password does not meet requirements.' });
     }
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync(pwd, salt);
     user = new User({ uname: uname, pwd: hash });
     await user.save();
-    return res.status(201).send('User created successfully.\n');
+    return res.status(201).send({ msg: 'User creation succeeded.' });
 });
 
-/*
-curl -i \
-POST "http://${APP_HOST_ADDRESS}:${APP_PORT}/sign-in" \
--H "Content-Type: application/json" \
--d '{"uname":"'"${TEST_UNAME}"'","pwd":"'"${TEST_PWD}"'"}'
-*/
-exports.sign_in = handle_internal_errors(async (req, res) => {
+exports.signIn = catchErrors(async (req, res, next) => {
     const { uname, pwd } = req.body;
+    if (!(uname && pwd)) {
+        return res.status(400).send({ msg :'Missing credentials.' });
+    }
     const user = await User.findOne({ uname });
     if (!user) {
-        return res.status(401).send('Invalid credentials.\n');
+        return res.status(401).send({ msg :'Invalid credentials.' });
     }
-    const pwd_match = bcrypt.compareSync(pwd, user.pwd);
-    if (!pwd_match) {
-        return res.status(401).send('Invalid credentials.\n');
+    const pwdMatch = bcrypt.compareSync(pwd, user.pwd);
+    if (!pwdMatch) {
+        console.debug('***no pwdMatch***')
+        return res.status(401).send({ msg: 'Invalid credentials.' });
     }
-    gen_and_attach_tokens(res, { name: user.uname, id: user.id });
+    req.jwtPayload = { uname: user.uname, id: user.id };
+    next();
 });
 
-/*
-curl -i \
--X POST http://${APP_HOST_ADDRESS}:${APP_PORT}/refresh \
---cookie "rt=${TEST_RT}"
-*/
-exports.refresh = handle_internal_errors(async (req, res) => {
+exports.refreshTokens = catchErrors(async (req, res, next) => {
     // If authenticated, get a new pair of access & refresh tokens (token rotation).
-    const rt = req?.cookies?.rt;
+    const { rt } = req.cookies;
     if (!rt) {
-        return res.status(400).send('Missing refresh token.\n')
+        return res.status(400).send({ msg: 'Missing refresh token.' });
     }
     try {
-        var { name, id } = jwt.verify(rt, process.env.RT_SECRET);
+        var { uname, id } = jwt.verify(rt, CONSTS.RT_SECRET);
     }
     catch (err) {
-        console.error(err);
-        return res.status(401).send("Attached refresh token is invalid or expired.\n")
+        return res.status(401).send({ msg: 'Token is invalid or expired.' })
     }
-    gen_and_attach_tokens(res, { name, id });
+    req.jwtPayload = { uname, id };
+    next();
 });
 
-/*
-curl -i \
--X POST http://${APP_HOST_ADDRESS}:${APP_PORT}/sign-out \
---cookie "rt=${TEST_RT}"
-*/
-exports.sign_out = handle_internal_errors(async (req, res) => {
+exports.signOut = catchErrors(async (req, res) => {
+    const { rt } = req.cookies;
+    if (!rt) {
+        return res.status(400).send({ msg: 'Missing refresh token, user is not signed in.' });
+    }
     res.clearCookie('rt', { httpOnly: true, secure: true });
-    return res.status(200).send('Sign out succeeded.');
+    return res.send({ msg: 'Sign out succeeded.' });
 });
 
-/*
-curl \
--X POST http://${APP_HOST_ADDRESS}:${APP_PORT}/verify \
---cookie "rt=${TEST_RT}"
-*/
-exports.verify = handle_internal_errors(async (req, res) => {
-    const rt = req?.cookies?.rt;
-    if (!rt) {
-        return res.status(400).send('Missing refresh token.\n');
+exports.verifyTokens = catchErrors((req, res) => {
+    const { at, rt } = req.cookies;
+    if (!(at && rt)) {
+        return res.status(400).send({ msg: 'Missing refresh and/or access tokens.' });
     }
+    var valid = {
+        at: true,
+        rt: true
+    };
     try {
-        jwt.verify(rt, process.env.RT_SECRET);
-        return res.send("Token is valid.\n");
+        jwt.verify(at, CONSTS.AT_SECRET);
     }
     catch (err) {
         console.error(err);
-        return res.send("Token is invalid.\n");
+        valid.at = false;
     }
+    try {
+        jwt.verify(rt, CONSTS.RT_SECRET);
+    }
+    catch (err) {
+        console.error(err);
+        valid.rt = false;
+    }
+    return res.send(valid)
 });
